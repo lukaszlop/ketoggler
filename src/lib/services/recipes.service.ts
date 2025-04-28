@@ -1,6 +1,13 @@
 import type { SupabaseClient } from "../../db/supabase.client";
 import { DEFAULT_USER_ID } from "../../db/supabase.client";
-import type { CreateRecipeCommand, IngredientDto, MacronutrientsDto, RecipeDto } from "../../types";
+import type {
+  CreateRecipeCommand,
+  IngredientDto,
+  MacronutrientsDto,
+  PagedRecipesResponse,
+  RecipeDto,
+} from "../../types";
+import type { GetRecipesQueryParams } from "../schemas/recipes";
 
 /**
  * Creates a new recipe in the database with all related data
@@ -106,7 +113,7 @@ export async function createRecipe(cmd: CreateRecipeCommand, supabase: SupabaseC
           name
         )
       ),
-      recipe_allergens (
+      recipe_allergens!inner (
         allergens!inner (
           name
         )
@@ -150,4 +157,99 @@ export async function createRecipe(cmd: CreateRecipeCommand, supabase: SupabaseC
     created_at: completeRecipe.created_at,
     updated_at: completeRecipe.updated_at,
   };
+}
+
+export async function getRecipes(
+  params: GetRecipesQueryParams,
+  supabase: SupabaseClient
+): Promise<PagedRecipesResponse> {
+  try {
+    let query = supabase
+      .from("recipes")
+      .select(
+        `
+      id,
+      title,
+      description,
+      user_id,
+      created_at,
+      updated_at,
+      macronutrients!inner (calories, protein, carbs, fats),
+      recipe_ingredients!inner (
+        quantity,
+        unit,
+        ingredients!inner (id, name)
+      ),
+      recipe_allergens (
+        allergens (name)
+      )
+    `
+      )
+      .eq("user_id", DEFAULT_USER_ID);
+
+    // Apply filters
+    if (params.kcal) {
+      query = query.eq("macronutrients.calories", params.kcal);
+    }
+
+    if (params.max_carbs) {
+      query = query.lte("macronutrients.carbs", params.max_carbs);
+    }
+
+    if (params.allergens) {
+      // Exclude recipes that contain any of the specified allergens
+      query = query.not("recipe_allergens.allergens.name", "in", params.allergens);
+    }
+
+    // Handle random selection if requested
+    if (params.random) {
+      query = query.order("random()").limit(1);
+    } else {
+      // Apply pagination
+      const from = (params.page - 1) * params.page_size;
+      const to = from + params.page_size - 1;
+      query = query.range(from, to);
+    }
+
+    const { data: recipes, error, count } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    // Map database results to DTOs
+    const recipeDtos: RecipeDto[] = recipes.map((recipe) => ({
+      id: recipe.id,
+      title: recipe.title,
+      description: recipe.description,
+      user_id: parseInt(recipe.user_id),
+      ingredients: recipe.recipe_ingredients.map((ri) => ({
+        id: ri.ingredients.id,
+        name: ri.ingredients.name,
+        quantity: ri.quantity,
+        unit: ri.unit || "",
+      })),
+      macronutrients: {
+        calories: recipe.macronutrients.calories,
+        protein: recipe.macronutrients.protein,
+        carbs: recipe.macronutrients.carbs,
+        fats: recipe.macronutrients.fats,
+      },
+      allergens: recipe.recipe_allergens.map((ra) => ra.allergens.name),
+      created_at: recipe.created_at,
+      updated_at: recipe.updated_at,
+    }));
+
+    return {
+      data: recipeDtos,
+      pagination: {
+        page: params.page,
+        page_size: params.page_size,
+        total: count || 0,
+      },
+    };
+  } catch (error) {
+    console.error("Error fetching recipes:", error);
+    throw error;
+  }
 }

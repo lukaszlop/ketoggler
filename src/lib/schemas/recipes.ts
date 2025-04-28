@@ -1,6 +1,25 @@
 import { z } from "zod";
 
 /**
+ * Schema for validating query parameters in GET /recipes endpoint
+ */
+export const GetRecipesQuerySchema = z
+  .object({
+    kcal: z.coerce.number().positive().optional(),
+    max_carbs: z.coerce.number().min(0).optional(),
+    allergens: z
+      .string()
+      .transform((str) => str.split(","))
+      .optional(),
+    random: z.coerce.boolean().optional(),
+    page: z.coerce.number().int().positive().optional().default(1),
+    page_size: z.coerce.number().int().positive().optional().default(10),
+  })
+  .strict();
+
+export type GetRecipesQueryParams = z.infer<typeof GetRecipesQuerySchema>;
+
+/**
  * Schema for validating macronutrients input in recipe creation/update
  */
 const macronutrientsSchema = z.object({
